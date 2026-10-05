@@ -29,6 +29,8 @@ LUA_PROXY_STDIN = "proxy_stdin.txt"
 LUA_PROXY_FALSE = "proxy_first.txt"
 LUA_PROXY_TRUE = "proxy_second.txt"
 PROXY_LOADED_PREFIX = "StyxScribe: ACK"
+PROTON_VERSION = "Proton 10.0"
+HADES_STEAM_ID = "1145360"
 INTERNAL_IGNORE_PREFIXES = (PROXY_LOADED_PREFIX,)
 OUTPUT_FILE = "game_output.log"
 PREFIX_LUA = "Lua:\t"
@@ -130,22 +132,30 @@ class StyxScribe():
                 return True
             return self.__contains__(key)
 
-    def __init__(self, game="Hades"):
+    def __init__(self, game="Hades", build="x64"):
         self.executable_name = EXECUTABLE_NAMES[game.lower()]
-        if platform.system() != "Darwin":
+        self.args = [f"/{arg}" for arg in EXECUTABLE_ARGS]
+        # adjust purepath, plugins and args depending on platform
+        if platform.system() == "Linux":
+            cwd = pathlib.Path(__file__).resolve().parent
+            self.executable_purepath = cwd / build / f"{self.executable_name}.exe"
+            self.plugins_paths = [str(cwd / "Content" / PLUGIN_SUBPATH)]
+        elif platform.system() == "Windows":
             self.executable_purepath = (
-                pathlib.PurePath() / "x64" / f"{self.executable_name}.exe"
+                pathlib.PurePath() / build / f"{self.executable_name}.exe"
             )
-            self.args = [f"/{arg}" for arg in EXECUTABLE_ARGS]
             self.plugins_paths = [str(
                 pathlib.PurePath() / "Content" / PLUGIN_SUBPATH
             )]
-        else:
+        elif platform.system() == "Darwin":
             self.executable_purepath = pathlib.PurePath() / self.executable_name
-            self.args = [f"-{arg}" for arg in executable_args]
+            self.args = [f"-{arg}" for arg in EXECUTABLE_ARGS]
             self.plugins_paths = [str(
                 pathlib.PurePath() / "Contents/Resources/Content" / PLUGIN_SUBPATH
             )]
+        else:
+            print("Unknown platform!")
+            sys.exit(1)
 
         self.executable_cwd_purepath = self.executable_purepath.parent
         if self.executable_name == "Pyre":
@@ -226,11 +236,11 @@ class StyxScribe():
         proxy_switch = False
 
         def sane(message):
-            equals = '='*(1+message.count('='))
+            equals = "="*(1+message.count("="))
             return f"[{equals}[{message}]{equals}]"
 
         def quick_write_file(path, content):
-            with open(path, 'w', encoding=self.encoding) as file:
+            with open(path, "w", encoding=self.encoding) as file:
                 file.write(content)
 
         def setup_proxies():
@@ -250,7 +260,7 @@ class StyxScribe():
             #https://gist.github.com/tomschr/39734f0151a14187fd8f4844f66be6ba#file-asyncio-producer-consumer-task_done-py-L22
             while True:
                 message = await self.queue.get()
-                with open(self.proxy_purepaths[proxy_switch], 'a', encoding=self.encoding) as file:
+                with open(self.proxy_purepaths[proxy_switch], "a", encoding=self.encoding) as file:
                     if echo and not message.startswith(tuple(self.ignore_prefixes)):
                         print(PREFIX_INPUT, message)
                     file.write(f",{sane(message)}")
@@ -267,13 +277,41 @@ class StyxScribe():
         @make_sync
         async def run(out=None):
             setup_proxies()
-
-            self.game = await Popen(
-                str(self.args[0]),*self.args[0:],
-                cwd=self.executable_purepath.parent,
-                stdout=PIPE,
-                stderr=STDOUT
-            )
+            PROTON= '/mnt/Video-Games/Steam-Games/SteamLibrary/steamapps/common/Proton 10.0/proton'
+            HADES_COMPAT_DATA_PATH = '/mnt/Video-Games/Steam-Games/SteamLibrary/steamapps/compatdata/1145360'
+            HADES_INSTALL_PATH = '/mnt/Video-Games/Steam-Games/SteamLibrary/steamapps/common/Hades'
+            #'protontricks-launch', '--appid=1145360', env={**os.environ, 'WINEDEBUG': '-all'}, *self.args,
+            #'flatpak', 'run', 'com.github.Matoking.protontricks', '--env=WINEDEBUG=-all', '--command=protontricks-launch', '--appid=1145360', *self.args,
+            #'wine', env={**os.environ, 'WINEDEBUG': '-all'}, *self.args,
+            #PROTON, 'run', str(self.args[0]), env={**os.environ, 'STEAM_COMPAT_DATA_PATH':HADES_COMPAT_DATA_PATH, 'STEAM_COMPAT_CLIENT_INSTALL_PATH':HADES_INSTALL_PATH}, *self.args[1:],
+            #PROTON, 'run', str(self.args[0]), '--env=STEAM_COMPAT_DATA_PATH='+STEAM_COMPAT_DATA_PATH, *self.args[1:],
+            if platform.system() == "Linux":
+                self.steamapps_path = (self.executable_purepath.parent.parent.parent.parent)
+                self.compat_data_path = (pathlib.PurePath(self.steamapps_path) / "compatdata" / HADES_STEAM_ID)
+                self.steam_client_path = (pathlib.PurePath(self.steamapps_path) / "common")
+                self.proton_path = (pathlib.PurePath(self.steam_client_path) / PROTON_VERSION / "proton")
+                self.args = [self.proton_path, "run", str(self.executable_purepath)]
+                env = {**os.environ,
+                       "STEAM_COMPAT_DATA_PATH":self.compat_data_path,
+                       "STEAM_COMPAT_CLIENT_INSTALL_PATH":self.steam_client_path
+                       }
+                self.game = await Popen(
+                    self.args[0],*self.args[1:],
+                    cwd=str(self.executable_purepath.parent),
+                    env=env,
+                    stdout=PIPE,
+                    stderr=STDOUT
+                )
+            elif platform.system() == "Windows":
+                self.game = await Popen(
+                    str(self.args[0]),*self.args[0:],
+                    cwd=self.executable_purepath.parent,
+                    stdout=PIPE,
+                    stderr=STDOUT
+                )
+            else:
+                print("Unknown platform, cannot run")
+                sys.exit(1)
 
             self.loop = asyncio.get_event_loop()
             self.queue = asyncio.Queue()
@@ -339,7 +377,7 @@ class StyxScribe():
             self.close()
 
         if log:
-            with open(log, 'w', encoding="utf8") as out:
+            with open(log, "w", encoding="utf8") as out:
                 run(out)
         else:
             run()
@@ -393,7 +431,7 @@ class StyxScribe():
         if source is not None:
             callback = f"{callback} from {source}"
         if PRINT_HOOKS:
-            print(f"Adding hook on \"{prefix}\" with {callback}")
+            print(f'Adding hook on "{prefix}" with {callback}')
 
     def load_plugins(self):
         modules = OrderedDict()
@@ -419,7 +457,7 @@ class StyxScribe():
             else:
                 _callback = getattr_nocase(module, "Callback")
                 if _callback is not None:
-                    _prefix = getattr_nocase(module, "Prefix", name + '\t')
+                    _prefix = getattr_nocase(module, "Prefix", name + "\t")
                     self.add_hook(_callback, _prefix, name)
                 _cleanup = getattr_nocase(module, "Cleanup")
                 if _cleanup is not None:
